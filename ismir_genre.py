@@ -103,12 +103,12 @@ if __name__ == "__main__":
             represent_w_num_beats,
             represent_w_song_length,
             represent_w_correlation,
-            partial(represent_w_correlation, rank=0),
-            partial(represent_w_correlation, rank=1),
-            partial(represent_w_correlation, rank=2),
-            partial(represent_w_correlation, rank=4),
-            partial(represent_w_correlation, rank=8),
-            partial(represent_w_correlation, rank=16),
+            partial(represent_w_correlation, order=0),
+            partial(represent_w_correlation, order=1),
+            partial(represent_w_correlation, order=2),
+            partial(represent_w_correlation, order=4),
+            partial(represent_w_correlation, order=8),
+            partial(represent_w_correlation, order=16),
         ),
     }
 

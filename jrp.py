@@ -1,10 +1,9 @@
-import multiprocessing
 from typing import Tuple, List
 
 import tqdm
 from xgboost import XGBClassifier
 
-from pitches_problem import SongAnalysis, PitchesProblem
+from pitches_problem import PitchesProblem, analysis_from_krn
 
 # Folder that contains jrp-scores;
 # git clone https://github.com/josquin-research-project/jrp-scores --recursive
@@ -16,127 +15,48 @@ git_folder_root = "/Users/bgeelen/data/josquin/source_new/jrp-scores"
 
 import glob
 import os
+import pickle
 
-import music21
 import numpy as np
 import pandas as pd
-import music21.converter
-from sklearn.linear_model import RidgeClassifier
+import matplotlib.pyplot as plt
 
 from ml import dictionary_of_models, confusion_matrix_for_problem, accuracy_from_confusion_matrix
-from representations import represent_w_correlation, represent_w_lstsq, represent_w_lstsq_rank
+from representations import represent_w_correlation, represent_w_lstsq, represent_w_lstsq_order, jsymbolic_representer, \
+    combined_representation, represent_w_fft, represent_w_welch
+
 #%%
-
-def agn_to_genre(agn: str) -> str:
-    agn = agn.replace("Chanson", "Song")
-    genres = ["Song", "Mass", "Motet"]
-    indices = dict()
-    for genre in genres:
-        if agn.startswith(genre):
-            return genre
-        if genre in agn:
-            indices[genre] = agn.index(genre)
-
-    return pd.Series(indices).argmin()
 
 
 cache_file = "parse_cache.p"
 
-
-def attribution_levels_for_work(work):  # -> dict[str, Tuple[int, str]]
-    attributions = [
-        x.comment[len("attribution-level@") :]
-        for x in work.recurse()
-        if isinstance(x, music21.humdrum.spineParser.GlobalComment)
-        and x.comment.startswith("attribution-level@")
-    ]
-
-    return {
-        attribution[:3]: (int(attribution[5]), attribution[7:])
-        for attribution in attributions
-    }
-
-
-def analyse_work(fname) -> SongAnalysis:
-    work = music21.converter.parse(fname)
-    id = os.path.split(fname)[1].split("-")[0]
-
-    notes = [x for x in work.recurse() if isinstance(x, music21.note.Note)]
-    first_measure = work.measures(0, 1)[0]
-    measure_length = first_measure.quarterLength
-
-    if (measure_length % 3.0) % 1.0 == 0.0:
-        tactus_length = measure_length / 3
-    else:
-        tactus_length = measure_length / 2
-
-    X = np.zeros((int(work.quarterLength / tactus_length), 12))
-    for note in notes:
-        try:
-            offset = note.getOffsetInHierarchy(work)
-        except KeyError:
-            print(fname)
-            raise
-        X[
-            int(offset // tactus_length) : int(
-                (offset + note.quarterLength) / tactus_length
-            ),
-            note.pitch.midi % 12,
-        ] += min(1.0, note.quarterLength / tactus_length)
-        # todo: check of midden van een noot eindigt in het midden van een tactus
-
-    globalreferences = {
-        ref.code: ref.value
-        for ref in work.recurse()
-        if isinstance(ref, music21.humdrum.spineParser.GlobalReference)
-    }
-
-    agn = globalreferences["AGN"]
-    genre = agn_to_genre(agn)
-    composer = id[:3].lower()
-
-    return SongAnalysis(
-        beats=X,
-        duration=work.duration.quarterLength,
-        source_fname=fname,
-        details={
-            "id": id,
-            "repid": id[:3],
-            "agn": agn,
-            **globalreferences,
-            "attributions": attribution_levels_for_work(work),
-        },
-        genre=genre,
-        composer=composer,
-    )
-
-
 all_genres = {"mass", "motet", "song"}
-all_composers = {
-    "Agr",
-    "Ano",
-    "Bru",
-    "Bus",
-    "Com",
-    "Das",
-    "Duf",
-    "Fry",
-    "Fva",
-    "Gas",
-    "Isa",
-    "Jap",
-    "Jos",
-    "Mar",
-    "Mou",
-    "Obr",
-    "Ock",
-    "Ort",
-    "Pip",
-    "Reg",
-    "Rue",
-    "Tin",
+repid_to_fullname = {
+    "ano": "Anonymous",
+    "agr": "Agricola",
+    "bin": "Binchois",
+    "bru": "Brumel",
+    "bus": "Busnoys",
+    "com": "Compere",
+    "das": "Daser",
+    "duf": "Du Fay",
+    "fva": "Févin",
+    "fry": "Frye",
+    "gas": "Gaspar",
+    "isa": "Isaac",
+    "jap": "Japart",
+    "jos": "Josquin",
+    "rue": "De La Rue",
+    "mar": "Martini",
+    "mou": "Mouton",
+    "obr": "Obrecht",
+    "ock": "Ockeghem",
+    "ort": "de Orto",
+    "pip": "Pipelare",
+    "reg": "Regis",
+    "tin": "Tinctoris",
 }
-all_composers = {c.lower() for c in all_composers}
+all_composers = {c.lower() for c in repid_to_fullname.keys()}
 
 
 def make_problem(
@@ -188,7 +108,7 @@ def make_problem(
 
         fnames = selected_fnames
 
-    analyses = [analyse_work(fname) for fname in tqdm.tqdm(fnames)]
+    analyses = [analysis_from_krn(fname) for fname in tqdm.tqdm(fnames)]
 
     # filter the genres
     if select_genres is not None:
@@ -218,140 +138,228 @@ def list_to_labelnames_and_y(l: List[str]) -> Tuple[List[str], np.ndarray]:
     return labelnames, y
 
 
-# %%
-if __name__ == "__main__":
+
+#%% Create the 'problem', which contains the state vectors for every work in the dataset
+
+
+if os.path.exists('problem.p'):
+    print('Loading problem from disk cache...')
+
+    with open('problem.p', 'rb') as f:
+        problem = pickle.load(f)
+
+else:
+    print('Creating new problem by parsing humdrum files...')
     problem = make_problem(
         objective="composer",
         josquin_unsure_is_ano=True,
     )
-        # select_composers=['Jos', 'Rue', 'Mar', 'Ock', 'Ano'],
+    # select_composers=['Jos', 'Rue', 'Mar', 'Ock', 'Ano'],
 
-    repr_funcs = {"correlation": lambda x: represent_w_lstsq_rank(x, rank=4)}
+    print('Caching problem to disk...')
+    with open('problem.p', 'wb') as f:
+        pickle.dump(problem, f)
 
-    accuracies = dict()
-    name_to_model = dictionary_of_models()
-
-    # name_to_model = {"Ridge": RidgeClassifier()}
-
-    for repr_func_name, repr_func in repr_funcs.items():
-
-        with multiprocessing.Pool() as pool:
-            X = np.vstack(map(repr_func, problem.song_analyses))
-
-        if True: # evaluate different models w cv
-            accuracies[repr_func_name] = dict()
-
-            for model_name, model in name_to_model.items():
-                print(" ", model_name.ljust(50), end="")
-                mat = confusion_matrix_for_problem(X, problem.y, model)
-                accuracy = accuracy_from_confusion_matrix(mat)
-                accuracies[repr_func_name][model_name] = accuracy
-                print(f"{accuracy:.4}")
-
-#%% make a single best pipeline
 
 #%%
-imshow_confusion_matrix(
-    mat,
-    [classname.title() for classname in problem.labelnames],
+
+repr_funcs = {
+    # 'jSymbolic': jsymbolic_representer(),
+    # "combined": combined_representation(
+    #     lambda x: represent_w_lstsq_order(x, order=1),
+    #     jsymbolic_representer()
+    # ),
+    'welch': lambda x: represent_w_welch(x, n_fft=6),
+    "1st order": lambda x: represent_w_lstsq_order(x, order=1),
+    # "1st order most_common": lambda x: represent_w_lstsq_order(x, order=1, root_method='most_common'),
+    # "1st order endnote": lambda x: represent_w_lstsq_order(x, order=1, root_method='endnote'),
+    "fft": lambda x: represent_w_fft(x, n_fft=6),
+    # "2nd order": lambda x: represent_w_lstsq_order(x, order=2),
+    # "3rd order": lambda x: represent_w_lstsq_order(x, order=3),
+    # "4th order": lambda x: represent_w_lstsq_order(x, order=4),
+    # "5th order": lambda x: represent_w_lstsq_order(x, order=5),
+    # "correlation_1": lambda x: represent_w_correlation(x, order=1),
+    # "correlation_4": lambda x: represent_w_correlation(x, order=4),
+}
+
+accuracies = dict()
+name_to_model = dictionary_of_models()
+
+# name_to_model = {"Ridge": RidgeClassifier()}
+
+ano_i = next(i for i, cls in enumerate(problem.labelnames) if cls == 'ano')
+ano_selector = np.array([y == ano_i for y in problem.y])
+
+for repr_func_name, repr_func in repr_funcs.items():
+    print(repr_func_name)
+
+    X = np.vstack([repr_func(sa) for sa, is_ano in zip(problem.song_analyses, ano_selector) if not is_ano])
+    y = problem.y[np.logical_not(ano_selector)]
+
+    if True: # evaluate different models w cv
+        accuracies[repr_func_name] = dict()
+
+        for model_name, model in name_to_model.items():
+            print(" ", model_name.ljust(50), end="")
+            mat = confusion_matrix_for_problem(X, y, model)
+            accuracy = accuracy_from_confusion_matrix(mat)
+            accuracies[repr_func_name][model_name] = accuracy
+            print(f"{accuracy:.4}")
+
+
+
+
+
+#%% Write the accuracies of the methods to an .xlsx file
+import pandas as pd
+(pd.DataFrame(accuracies).round(3) * 100).T.to_excel('accuracies.xlsx')
+
+# !open accuracies.xlsx
+#%% Show the most prevalent labels in the dataset
+
+from collections import Counter
+
+prevalences = Counter(
+    problem.labelnames[yi]
+    for yi in problem.y
 )
 
+print(dict(prevalences.most_common(10)))
 
 
-#%%
+#%% Details of example to plot
 
-import matplotlib.pyplot as plt
-#%%
+piece_id = 'Ano3225'
+piece_author = 'Anonymous'
+piece_name = "Helas mon cueur tu m'occiras"
 
-# Create sequence imshow
+sa = next(sa for sa in problem.song_analyses if piece_id in sa.source_fname)
+
+#%% Print the sequence as a matrix
+
+with np.printoptions(
+        suppress=True,
+        precision=3,
+        floatmode='maxprec',
+        sign=' ',
+        linewidth=np.inf):
+    print(sa.beats[:20, ::-1].T.round(2))
+
+#%% Create sequence imshow
+
+n_measures = 90
 chromae_names = ['C', '', 'D', '', 'E', 'F', '', 'G', '', 'A', '', 'B']
-sa = [sa for sa in problem.song_analyses if 'Jos2701' in sa.source_fname][0]
-plt.figure(figsize=[8, 2], dpi=300)
-n_measures = 60
-plt.imshow(sa.beats[:n_measures].T, origin='lower')
+plt.figure(figsize=[8, 2.5], dpi=300)
+plt.imshow(sa.beats[:n_measures].T, origin='lower', aspect='auto', interpolation='nearest')
 # plt.xticks(range(0, n_measures, 4), range(1, n_measures + 1, 4))
 plt.xticks([], [])
 plt.yticks(range(12), chromae_names)
-# plt.title('Josquin, A la mort / Monstra te esse matrem')
+plt.title(f"{piece_author}, {piece_name}")
 plt.xlabel('Time (each column one tactus)')
 # plt.colorbar()
 plt.show()
 
-#%%
+#%% Print the transition matrix
 
-# imshow the transition matrix
-x = represent_w_lstsq(sa)
+x = represent_w_lstsq(sa).reshape(12, 12)
+
+with np.printoptions(suppress=True, precision=3, floatmode='maxprec', sign=' ', linewidth=np.inf):
+    print(x.round(3).T[:, ::-1])
+
+#%% Imshow the transition matrix
+
 plt.figure(figsize=(5, 5), dpi=300)
-plt.imshow(x.reshape(12, 12), origin='lower')
-plt.title('Transition matrix:\nJosquin, A la mort / Monstra te esse matrem')
-plt.xlabel('Activity in predicted tactus')
-plt.ylabel('Activity in previous tactus')
-plt.xticks(range(12), chromae_names)
+plt.imshow(x[::-1].T, origin='lower')
+plt.title(f"Transition matrix:\n{piece_name}")
+plt.xlabel('Activity in previous tactus')
+plt.ylabel('Activity in predicted tactus')
+plt.xticks(range(12), chromae_names[::-1])
 plt.yticks(range(12), chromae_names)
+plt.colorbar()
 plt.show()
 
-print(x.reshape(12, 12))
+#%% Dimensionality reduction
 
+# X = np.vstack(map(lambda x: represent_w_lstsq_order(x, order=1), problem.song_analyses))
+X = np.vstack(map(jsymbolic_representer(), problem.song_analyses))
 
 #%%
 
 from sklearn.decomposition.pca import PCA
+from sklearn.neighbors import NeighborhoodComponentsAnalysis
 from umap import UMAP
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 
-transformed = UMAP(n_components=2).fit_transform(X, problem.y)
+for transformed, title in [
+    (UMAP(n_components=2, random_state=0).fit_transform(X, problem.y), 'UMAP analysis'),
+    # (PCA(2).fit_transform(X), 'PCA analysis'),
+    # (NeighborhoodComponentsAnalysis(2).fit_transform(X, problem.y), "NCA")
+]:
+    plt.figure(figsize=(6, 5), dpi=400)
+    for class_i, _ in Counter(problem.y).most_common():
+        # dict(counter.most_common(3)).keys()
+        selector = problem.y == class_i
 
-
-
-#%%
-
-plt.figure()
-for class_i in set(problem.y):
-    # dict(counter.most_common(3)).keys()
-    if problem.labelnames[class_i] == 'ano':
-        continue
-    selector = problem.y == class_i
-
-    if selector.sum() < 20:
-        continue
-    plt.scatter(
-        transformed[selector, 0],
-        transformed[selector, 1],
-        label=problem.labelnames[class_i],
+        if selector.sum() < 25 or problem.labelnames[class_i] == 'ano':
+            plt.scatter(
+                transformed[selector, 0],
+                transformed[selector, 1],
+                c='#00000000'
+            )
+        else:
+            plt.scatter(
+                transformed[selector, 0],
+                transformed[selector, 1],
+                label=repid_to_fullname[problem.labelnames[class_i]],
+            )
+    plt.gca().legend(
+        loc='upper center',
+        bbox_to_anchor=(0.5, -0.05),
+        ncol=4,
+        fancybox=True,
+        shadow=True,
     )
-plt.gca().legend(loc='upper center', bbox_to_anchor=(0.5, -0.05),
-          fancybox=True, shadow=True, ncol=5)
-plt.xticks([])
-plt.yticks([])
-plt.show()
+    plt.xticks([])
+    plt.yticks([])
+    plt.title(f'{title}: by author')
+    plt.tight_layout()
+    plt.show()
 
-#%%
 
-plt.figure()
-genres = np.array([sa.genre for sa in problem.song_analyses])
+    plt.figure(figsize=(6, 5), dpi=400)
+    genres = np.array([sa.genre for sa in problem.song_analyses])
 
-for genre in ['Mass', 'Motet', 'Song']:
-    # dict(counter.most_common(3)).keys()
-    selector = genres == genre
-    plt.scatter(
-        transformed[selector, 0],
-        transformed[selector, 1],
-        label=genre,
+    for genre in ['Mass', 'Motet', 'Song']:
+        # dict(counter.most_common(3)).keys()
+        selector = genres == genre
+        plt.scatter(
+            transformed[selector, 0],
+            transformed[selector, 1],
+            label=genre,
+        )
+    plt.gca().legend(
+        loc='upper center',
+        bbox_to_anchor=(0.5, -0.05),
+        fancybox=True,
+        shadow=True,
+        ncol=2,
     )
-plt.gca().legend(loc='upper center', bbox_to_anchor=(0.5, -0.05),
-          fancybox=True, shadow=True, ncol=5)
 
-plt.xticks([])
-plt.yticks([])
-plt.show()
+    plt.xticks([])
+    plt.yticks([])
+    plt.title(f'{title}: by genre')
+    plt.tight_layout()
+    plt.show()
 
 #%% Confusion matrix
 
 from plotting import imshow_confusion_matrix
 from ml import cross_val_predict_confusion_matrix_for_problem
 
-selector = np.array([sa.composer != 'ano' for sa in problem.song_analyses])
-X_no_ano = X[selector]
-y_no_ano = problem.y[selector]
+ano_selector = np.array([sa.composer != 'ano' for sa in problem.song_analyses])
+X_no_ano = X[ano_selector]
+y_no_ano = problem.y[ano_selector]
 
 model = XGBClassifier(n_estimators=1000, n_jobs=-1, max_depth=20, learning_rate=.1)
 mat = cross_val_predict_confusion_matrix_for_problem(X_no_ano, y_no_ano, model)
@@ -373,10 +381,13 @@ plt.show()
 
 #%% Predict anonymous cases
 
+# Train on all securely attributed works
 model.fit(X_no_ano, y_no_ano)
-#%%
 
-probs = model.predict_proba(X[np.logical_not(selector)])
+#%%
+# Generate prediction probabilities
+
+probs = model.predict_proba(X[np.logical_not(ano_selector)])
 predictions = probs.argmax(1)
 predictions_probs = probs.max(1)
 predictions = [labelnames_no_ano[prediction] for prediction in predictions]
@@ -385,24 +396,87 @@ titles = [sa.source_fname.split('/')[-1][:-4] for sa in problem.song_analyses if
 titles = [title.replace('_', ' ') for title in titles]
 titles = ['-'.join(title.split('-')[1:]) for title in titles]
 
-repid_to_fullname = {
-    'jos': 'Josquin',
-    'rue': 'De La Rue',
-    'bus': 'Busnois',
-    'com': 'Compere',
-    'ock': 'Ockeghem',
-    'mar': 'Martini',
-    'gas': 'van Weerbeke',
-    'duf': 'Du Fay',
-    'jap': 'Japart',
-    'obr': 'Obrecht',
-    'agr': 'Agricola',
-    'ort': 'de Orto',
-}
+#%%
 
-pd.DataFrame({
+most_certain_predictions = pd.DataFrame({
     'JRP id': np.array([sa.details['id'] for sa in problem.song_analyses if sa.composer == 'ano']),
     'Work title': titles,
     'Predicted composer': [repid_to_fullname[prediction] for prediction in predictions],
     'Probability': [f'{p*100:.4}%' for p in predictions_probs]
-}).sort_values('Probability', ascending=False).to_excel('out.xlsx')
+}).sort_values('Probability', ascending=False)
+
+most_certain_predictions.to_excel('most_certain_predictions.xlsx')
+
+# !open most_certain_predictions.xlsx
+
+#%%
+
+leuven_chansonnier_ids = {'Ano3225', 'Ano3226', 'Ano3229', 'Ano3230', 'Ano3231', 'Ano3232'}
+(
+    most_certain_predictions
+    .loc[
+        most_certain_predictions['JRP id'].apply(lambda x: x in leuven_chansonnier_ids)
+    ]
+    .sort_values('JRP id')
+    .to_excel('leuven_chansonnier_predictions.xlsx')
+)
+# !open leuven_chansonnier_predictions.xlsx
+
+
+#%% Export all predictions
+
+all_predictions = pd.DataFrame(
+    data=probs,
+    index=[sa.details['id'] for sa in problem.song_analyses if sa.composer == 'ano'],
+    columns=labelnames_no_ano
+)
+all_predictions['name'] = all_predictions.index.map(
+    {sa.details['id'] : sa.source_fname.split('/')[-1][:-4] for sa in problem.song_analyses}.get)
+all_predictions.sort_index().to_excel('all_predictions.xlsx')
+
+
+#%%
+
+
+predicted_1_step = sa.beats @ represent_w_lstsq(sa).reshape(12, 12)
+
+predicted_2_step = np.hstack([sa.beats[0 + i : i - 2, :] for i in range(2)])\
+                       @ (represent_w_lstsq_order(sa, 2).reshape(24, 12))
+# predicted_4_step = np.hstack([sa.beats[0 + i : i - 4, :] for i in range(4)])\
+#                        @ (represent_w_lstsq_order(sa, 4).reshape(48, 12))
+
+predicted_1_step = np.vstack([np.nan * np.ones((1, 12)), predicted_1_step])
+predicted_2_step = np.vstack([np.nan * np.ones((2, 12)), predicted_2_step])
+# predicted_4_step = np.vstack([np.nan * np.ones((4, 12)), predicted_4_step])
+
+plt.figure(figsize=(8, 5), dpi=300)
+plt.subplot(3, 1, 1)
+plt.title('"True" state throughout the song')
+plt.imshow(sa.beats[:n_measures].T, origin='lower')
+plt.yticks(range(12), chromae_names)
+plt.xticks([], [])
+# plt.colorbar()
+
+plt.subplot(3, 1, 2)
+plt.title('Prediction of the next step when only using the previous state')
+plt.imshow(predicted_1_step[:n_measures].T, origin='lower')
+plt.yticks(range(12), chromae_names)
+plt.xticks([], [])
+# plt.colorbar()
+
+plt.subplot(3, 1, 3)
+plt.title('Prediction of the next step when using the previous 2 states')
+plt.imshow(predicted_2_step[:n_measures].T, origin='lower')
+plt.yticks(range(12), chromae_names)
+plt.xticks([], [])
+# plt.colorbar()
+
+
+
+plt.show()
+
+
+
+#%%
+
+

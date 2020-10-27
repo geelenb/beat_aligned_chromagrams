@@ -21,7 +21,7 @@ from representations import (
     combined_representation,
     represent_w_correlation,
     represent_w_bpm,
-    represent_w_song_length, represent_w_num_beats, represent_w_dct, represent_w_lstsq, represent_w_lstsq_rank)
+    represent_w_song_length, represent_w_num_beats, represent_w_dct, represent_w_lstsq, represent_w_lstsq_order)
 
 np.warnings.filterwarnings("ignore")
 
@@ -74,18 +74,18 @@ if __name__ == "__main__":
         # "combined_2": combined_representation(
         #     represent_w_mean,
         #     represent_w_correlation,
-        #     partial(represent_w_correlation, rank=2),
-        #     partial(represent_w_correlation, rank=4),
+        #     partial(represent_w_correlation, order=2),
+        #     partial(represent_w_correlation, order=4),
         # ),
         "combined_with_correlation": combined_representation(
             represent_w_bpm,
             represent_w_song_length,
             represent_w_num_beats,
             represent_w_mean,
-            partial(represent_w_correlation, rank=0),
+            partial(represent_w_correlation, order=0),
             represent_w_correlation,
-            partial(represent_w_correlation, rank=2),
-            partial(represent_w_correlation, rank=4),
+            partial(represent_w_correlation, order=2),
+            partial(represent_w_correlation, order=4),
         ),
     }
 

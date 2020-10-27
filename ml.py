@@ -45,17 +45,17 @@ def dictionary_of_models():
         # "SVM RBF": SVC(kernel='rbf'),
         # "SVM sigmoid": SVC(kernel='sigmoid'),
         "KNN minkowski": KNeighborsClassifier(5),
-        # "DecisionTree": DecisionTreeClassifier(),
-        # "RandomForest max_depth = None": RandomForestClassifier(
-        #     n_estimators=10000, max_depth=None
-        # ),
+        "DecisionTree": DecisionTreeClassifier(),
+        "RandomForest": RandomForestClassifier(
+            n_estimators=100, max_depth=None
+        ),
         # "RandomForest max_depth = 16": RandomForestClassifier(
         #     n_estimators=10000, max_depth=16
         # ),
-        "XGBoost": XGBClassifier(n_estimators=1000, n_jobs=-1),
-        "XGBoost 20": XGBClassifier(n_estimators=1000, n_jobs=-1, max_depth=20, learning_rate=.1), # 0.672
-        "XGBoost 50": XGBClassifier(n_estimators=1000, n_jobs=-1, max_depth=50, learning_rate=.1), # 0.672
-        "XGBoost 100": XGBClassifier(n_estimators=1000, n_jobs=-1, max_depth=100, learning_rate=.1), # 0.672
+        "XGBoost 1000": XGBClassifier(n_estimators=1000, n_jobs=-1),
+        # "XGBoost 20": XGBClassifier(n_estimators=1000, n_jobs=-1, max_depth=20, learning_rate=.1), # 0.672
+        # "XGBoost 50": XGBClassifier(n_estimators=50, n_jobs=-1, max_depth=50, learning_rate=.1), # 0.672
+        # "XGBoost 100": XGBClassifier(n_estimators=1000, n_jobs=-1, max_depth=100, learning_rate=.1), # 0.672
     }
 
     models = {

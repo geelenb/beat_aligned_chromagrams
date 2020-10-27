@@ -11,7 +11,7 @@ from sklearn.preprocessing import StandardScaler
 from umap import UMAP
 from xgboost import XGBClassifier
 
-from representations import represent_w_lstsq_rank, shift_root_to_first_column
+from representations import represent_w_lstsq_order, shift_root_to_first_column
 import ml
 import plotting
 from pitches_problem import beats_chroma, analyse_audio, PitchesProblem, SongAnalysis
@@ -293,14 +293,14 @@ plotting.imshow_confusion_matrix(
 
 #%%
 
-def represent_w_correlation(sa: SongAnalysis, rank: int = 1):
+def represent_w_correlation(sa: SongAnalysis, order: int = 1):
     matrix = sa.beats[:, :12]
-    if rank == 0:
+    if order == 0:
         representation = matrix.T @ matrix
         # representation = np.cov(matrix.T)
     else:
-        representation = matrix[:-rank].T @ matrix[rank:]
-        # representation = np.cov(matrix[:-rank].T, matrix[rank:].T)[12:, :12]
+        representation = matrix[:-order].T @ matrix[order:]
+        # representation = np.cov(matrix[:-order].T, matrix[order:].T)[12:, :12]
     return representation.flatten()
 
 corr_bowie = represent_w_correlation(sa)
@@ -430,7 +430,7 @@ plt.show()
 #%%
 
 xs = np.vstack(
-    represent_w_correlation(sa, rank=1) for sa in gtzan.song_analyses
+    represent_w_correlation(sa, order=1) for sa in gtzan.song_analyses
 )
 
 model = XGBClassifier(n_estimators=1000)
@@ -445,7 +445,7 @@ plotting.imshow_confusion_matrix(
 #%%
 
 xs = np.vstack(
-    represent_w_correlation(sa, rank=4) for sa in gtzan.song_analyses
+    represent_w_correlation(sa, order=4) for sa in gtzan.song_analyses
 )
 
 model = XGBClassifier(n_estimators=1000)
@@ -459,18 +459,18 @@ plotting.imshow_confusion_matrix(
 
 #%%
 
-def represent_w_correlation_shifted(sa: SongAnalysis, rank: int = 1):
+def represent_w_correlation_shifted(sa: SongAnalysis, order: int = 1):
     matrix = shift_root_to_first_column(sa.beats[:, :12])
-    if rank == 0:
+    if order == 0:
         representation = matrix.T @ matrix
         # representation = np.cov(matrix.T)
     else:
-        representation = matrix[:-rank].T @ matrix[rank:]
-        # representation = np.cov(matrix[:-rank].T, matrix[rank:].T)[12:, :12]
+        representation = matrix[:-order].T @ matrix[order:]
+        # representation = np.cov(matrix[:-order].T, matrix[order:].T)[12:, :12]
     return representation.flatten()
 
 xs = np.vstack(
-    represent_w_correlation_shifted(sa, rank=4) for sa in gtzan.song_analyses
+    represent_w_correlation_shifted(sa, order=4) for sa in gtzan.song_analyses
 )
 
 model = XGBClassifier(n_estimators=1000)
@@ -484,18 +484,18 @@ plotting.imshow_confusion_matrix(
 
 #%%
 
-def represent_w_correlation_shifted_pitches(sa: SongAnalysis, rank: int = 1):
+def represent_w_correlation_shifted_pitches(sa: SongAnalysis, order: int = 1):
     matrix = shift_root_to_first_column(sa.beats)
-    if rank == 0:
+    if order == 0:
         representation = matrix.T @ matrix
         # representation = np.cov(matrix.T)
     else:
-        representation = matrix[:-rank].T @ matrix[rank:]
-        # representation = np.cov(matrix[:-rank].T, matrix[rank:].T)[12:, :12]
+        representation = matrix[:-order].T @ matrix[order:]
+        # representation = np.cov(matrix[:-order].T, matrix[order:].T)[12:, :12]
     return representation.flatten()
 
 xs = np.vstack(
-    represent_w_correlation_shifted_pitches(sa, rank=4) for sa in gtzan.song_analyses
+    represent_w_correlation_shifted_pitches(sa, order=4) for sa in gtzan.song_analyses
 )
 
 model = XGBClassifier(n_estimators=1000)

@@ -6,6 +6,7 @@ from pitches_problem import SongAnalysis
 def mimo_cross_cepstrum(y, windowsize, fs_y):
     """
     y = matrix van signalen (12 x T)
+    (oude versie)
     windowsize = 2**(7)
     check docs van csd
     """
@@ -38,8 +39,35 @@ def mimo_cross_cepstrum(y, windowsize, fs_y):
 
     return power_cepstrum
 
+def represent_w_mimo_cepstrum(
+        song_analysis: SongAnalysis,
+        nperseg: int = 64,
+        nfft: int = 64,
+        cutoff: int = 32,
+):
+    y = song_analysis.beats
+    fs, cpsd = scipy.signal.csd(y[:, :, np.newaxis], y[:, np.newaxis, :],
+        fs=1.0,
+        window='hamming',
+        nperseg=nperseg,
+        noverlap=None,
+        nfft=nfft,
+        detrend=False,  # 'constant',
+        return_onesided=False,
+        scaling='density',
+        axis=0,
+        average='mean',
+    )
 
-def represent_w_mimo_ceptrum(song_analysis: SongAnalysis):
-    matrix = song_analysis.beats
-    return mimo_cross_cepstrum(matrix.T, 128, 1)[1:65]
+    np.nan_to_num(cpsd, copy=False)
+    cpsd = np.linalg.det(cpsd)
+    np.abs(cpsd, out=cpsd)
+    np.log(cpsd, out=cpsd)
+    np.nan_to_num(cpsd, copy=False)
+
+    return np.real(np.fft.ifft(cpsd)[1:cutoff]) * np.sqrt(np.arange(1, cutoff))
+
+# def represent_w_mimo_ceptrum(song_analysis: SongAnalysis):
+#     matrix = song_analysis.beats
+#     return mimo_cross_cepstrum(matrix.T, 128, 1)[1:65]
 

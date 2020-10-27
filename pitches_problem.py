@@ -1,3 +1,4 @@
+import os
 from collections import namedtuple
 from dataclasses import dataclass, field
 
@@ -6,6 +7,9 @@ import librosa
 import numpy as np
 from scipy.fftpack import dct
 from typing import List
+import music21
+from music21 import midi
+import pandas as pd
 
 sr = None
 hops_per_s = 20
@@ -111,6 +115,107 @@ def analysis_from_h5py(fname, include_timbres=False) -> SongAnalysis:
             dict(),
         )
 
+def agn_to_genre(agn: str) -> str:
+    agn = agn.replace("Chanson", "Song")
+    genres = ["Song", "Mass", "Motet"]
+    indices = dict()
+    for genre in genres:
+        if agn.startswith(genre):
+            return genre
+        if genre in agn:
+            indices[genre] = agn.index(genre)
+
+    return pd.Series(indices).argmin()
+
+
+def _attribution_levels_for_work(work):  # -> dict[str, Tuple[int, str]]
+    attributions = [
+        x.comment[len("attribution-level@") :]
+        for x in work.recurse()
+        if isinstance(x, music21.humdrum.spineParser.GlobalComment)
+        and x.comment.startswith("attribution-level@")
+    ]
+
+    return {
+        attribution[:3]: (int(attribution[5]), attribution[7:])
+        for attribution in attributions
+    }
+
+def analysis_from_krn(fname: str) -> SongAnalysis:
+    work = music21.converter.parse(fname)
+    id = os.path.split(fname)[1].split("-")[0]
+
+    notes = [x for x in work.recurse() if isinstance(x, music21.note.Note)]
+    first_measure = work.measures(0, 1)[0]
+    while not isinstance(first_measure, music21.stream.Measure):
+        first_measure = first_measure.measures(0, 1)[0]
+    measure_length = first_measure.quarterLength
+
+    if (measure_length % 3.0) == 0.0:
+        tactus_length = measure_length / 3
+    else:
+        tactus_length = measure_length / 2
+
+    X = np.zeros((int(work.quarterLength / tactus_length), 12))
+    for note in notes:
+        quarterLength = note.quarterLength
+        offset = note.getOffsetInHierarchy(work)
+        X[
+            int(offset // tactus_length) : int((offset + quarterLength) / tactus_length),
+            note.pitch.midi % 12,
+        ] += min(1.0, quarterLength / tactus_length)
+
+        if (offset + quarterLength) % tactus_length > 0.0:
+            # if the note ends before the end of a tactus
+            try:
+                X[
+                    int((offset + quarterLength) / tactus_length),
+                    note.pitch.midi % 12
+                ] += ((offset + quarterLength) % tactus_length) / tactus_length
+            except IndexError:
+                pass
+
+        if offset % tactus_length > 0.0:
+            # if the note starts after the start of a tactus
+            try:
+                X[
+                    int(offset / tactus_length),
+                    note.pitch.midi % 12
+                ] -= offset % tactus_length / tactus_length
+            except IndexError:
+                pass
+
+    globalreferences = {
+        ref.code: ref.value
+        for ref in work.recurse()
+        if isinstance(ref, music21.humdrum.spineParser.GlobalReference)
+    }
+
+    agn = globalreferences["AGN"]
+    genre = agn_to_genre(agn)
+    composer = id[:3].lower()
+
+    return SongAnalysis(
+        beats=X,
+        duration=work.duration.quarterLength,
+        source_fname=fname,
+        details={
+            "id": id,
+            "repid": id[:3],
+            "agn": agn,
+            **globalreferences,
+            "attributions": _attribution_levels_for_work(work),
+        },
+        genre=genre,
+        composer=composer,
+    )
+
+def analysis_from_midi(midi_fname, h5_fname=None) -> SongAnalysis:
+    midi.MidiFile(midi_fname)
+
+
+    if h5_fname:
+        pass
 
 
 if __name__ == "__main__":
@@ -123,4 +228,19 @@ if __name__ == "__main__":
         # sb = analysis_from_h5py('/Users/bgeelen/Data/msd/data/a/a/a/TRAAAAW128F429D538.h5', True)
         f = h5py.File("/Users/bgeelen/Data/msd/data/a/a/a/TRAAAAW128F429D538.h5")
 
-    SongAnalysis(np.ones([1]), 120.9, 180.0)
+    if True:
+        fname = '/Users/bgeelen/Data/lakh/lmd_matched/A/A/A/TRAAAGR128F425B14B/1d9d16a9da90c090809c153754823c2b.mid'
+        midifile = midi.MidiFile()
+        midifile.open(fname)
+        midifile.read()
+        midifile.close()
+
+        stream = music21.midi.translate.midiFileToStream(midifile)
+        notes = [x for x in work.recurse() if isinstance(x, music21.note.Note)]
+        first_measure = work.measures(0, 1)[0]
+        measure_length = first_measure.quarterLength
+
+
+
+
+
